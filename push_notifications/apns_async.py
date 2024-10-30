@@ -1,7 +1,7 @@
 import asyncio
 import time
 from dataclasses import asdict, dataclass
-from typing import Awaitable, Callable, Dict, Optional, Union
+from typing import Awaitable, Callable, Dict, Optional, Union, Tuple, Any
 
 from aioapns import APNs, ConnectionError, NotificationRequest
 from aioapns.common import NotificationResult
@@ -121,12 +121,6 @@ class APNsService:
 		topic: str = None,
 		err_func: ErrFunc = None,
 	):
-		try:
-			loop = asyncio.get_event_loop()
-		except RuntimeError:
-			loop = asyncio.new_event_loop()
-			asyncio.set_event_loop(loop)
-
 		self.client = self._create_client(
 			creds=creds, application_id=application_id, topic=topic, err_func=err_func
 		)
@@ -140,10 +134,17 @@ class APNsService:
 		res = loop.run_until_complete(routine)
 		return res
 
-	async def send_bulk_messages(self, requests):
-		semaphore = asyncio.Semaphore(5)
-		results = await asyncio.gather(*(self.send_message_async(request, semaphore) for request in requests))
-		return results
+	def send_bulk_messages(self, requests):
+		async def _send():
+			semaphore = asyncio.Semaphore(5)
+			results: tuple[Any] = await asyncio.gather(*(self.send_message_async(request, semaphore) for request in requests))
+			return results
+
+		try:
+			loop = asyncio.get_event_loop()
+			return loop.run_until_complete(_send())
+		except RuntimeError:
+			return asyncio.run(_send())
 
 	async def send_message_async(self, request, semaphore):
 		async with semaphore:
@@ -340,45 +341,39 @@ def apns_send_bulk_message(
 	:param application_id: The application_id to use
 	:param creds: The credentials to use
 	"""
-	async def _send():
-		topic = get_manager().get_apns_topic(application_id)
-		results: Dict[str, str] = {}
-		inactive_tokens = []
-		apns_service = APNsService(
-			application_id=application_id, creds=creds, topic=topic, err_func=err_func
+	topic = get_manager().get_apns_topic(application_id)
+	results: Dict[str, str] = {}
+	inactive_tokens = []
+	apns_service = APNsService(
+		application_id=application_id, creds=creds, topic=topic, err_func=err_func
+	)
+
+	requests = [apns_service._create_notification_request_from_args(
+		registration_id,
+		alert,
+		badge=badge,
+		sound=sound,
+		extra=extra,
+		expiration=expiration,
+		thread_id=thread_id,
+		loc_key=loc_key,
+		priority=priority,
+		collapse_id=collapse_id,
+	) for registration_id in registration_ids]
+
+	responses = apns_service.send_bulk_messages(requests)
+	results = {}
+	for registration_id, result in responses:
+		results[registration_id] = (
+			"Success" if result.is_successful else result.description
+		)
+		if not result.is_successful and result.description == "Unregistered":
+			inactive_tokens.append(registration_id)
+
+	if len(inactive_tokens) > 0:
+		models.APNSDevice.objects.filter(registration_id__in=inactive_tokens).update(
+			active=False
 		)
 
-		requests = [apns_service._create_notification_request_from_args(
-			registration_id,
-			alert,
-			badge=badge,
-			sound=sound,
-			extra=extra,
-			expiration=expiration,
-			thread_id=thread_id,
-			loc_key=loc_key,
-			priority=priority,
-			collapse_id=collapse_id,
-		) for registration_id in registration_ids]
-
-		responses = await apns_service.send_bulk_messages(requests)
-		results = {}
-		for registration_id, result in responses:
-			results[registration_id] = (
-				"Success" if result.is_successful else result.description
-			)
-			if not result.is_successful and result.description == "Unregistered":
-				inactive_tokens.append(registration_id)
-
-		if len(inactive_tokens) > 0:
-			models.APNSDevice.objects.filter(registration_id__in=inactive_tokens).update(
-				active=False
-			)
-		return results
-
-	try:
-		loop = asyncio.get_event_loop()
-		return loop.run_until_complete(_send())
-	except RuntimeError:
-		return asyncio.run(_send())
+	return results
 
