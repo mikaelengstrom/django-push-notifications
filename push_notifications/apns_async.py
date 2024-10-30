@@ -140,6 +140,17 @@ class APNsService:
 		res = loop.run_until_complete(routine)
 		return res
 
+	async def send_bulk_messages(self, requests):
+		semaphore = asyncio.Semaphore(5)
+		results = await asyncio.gather(*(self.send_message_async(request, semaphore) for request in requests))
+		return results
+
+	async def send_message_async(self, request, semaphore):
+		async with semaphore:
+			response = await self.client.send_notification(request)
+
+		return request.device_token, response,
+
 	def _create_notification_request_from_args(
 		self,
 		registration_id: str,
@@ -214,6 +225,7 @@ class APNsService:
 			**asdict(creds),
 			topic=topic,  # Bundle ID
 			use_sandbox=use_sandbox,
+			max_connections=50,
 			err_func=err_func,
 		)
 		return client
@@ -328,15 +340,15 @@ def apns_send_bulk_message(
 	:param application_id: The application_id to use
 	:param creds: The credentials to use
 	"""
+	async def _send():
+		topic = get_manager().get_apns_topic(application_id)
+		results: Dict[str, str] = {}
+		inactive_tokens = []
+		apns_service = APNsService(
+			application_id=application_id, creds=creds, topic=topic, err_func=err_func
+		)
 
-	topic = get_manager().get_apns_topic(application_id)
-	results: Dict[str, str] = {}
-	inactive_tokens = []
-	apns_service = APNsService(
-		application_id=application_id, creds=creds, topic=topic, err_func=err_func
-	)
-	for registration_id in registration_ids:
-		request = apns_service._create_notification_request_from_args(
+		requests = [apns_service._create_notification_request_from_args(
 			registration_id,
 			alert,
 			badge=badge,
@@ -347,17 +359,26 @@ def apns_send_bulk_message(
 			loc_key=loc_key,
 			priority=priority,
 			collapse_id=collapse_id,
-		)
+		) for registration_id in registration_ids]
 
-		result = apns_service.send_message(request)
-		results[registration_id] = (
-			"Success" if result.is_successful else result.description
-		)
-		if not result.is_successful and result.description == "Unregistered":
-			inactive_tokens.append(registration_id)
+		responses = await apns_service.send_bulk_messages(requests)
+		results = {}
+		for registration_id, result in responses:
+			results[registration_id] = (
+				"Success" if result.is_successful else result.description
+			)
+			if not result.is_successful and result.description == "Unregistered":
+				inactive_tokens.append(registration_id)
 
-	if len(inactive_tokens) > 0:
-		models.APNSDevice.objects.filter(registration_id__in=inactive_tokens).update(
-			active=False
-		)
-	return results
+		if len(inactive_tokens) > 0:
+			models.APNSDevice.objects.filter(registration_id__in=inactive_tokens).update(
+				active=False
+			)
+		return results
+
+	try:
+		loop = asyncio.get_event_loop()
+		return loop.run_until_complete(_send())
+	except RuntimeError:
+		return asyncio.run(_send())
+
