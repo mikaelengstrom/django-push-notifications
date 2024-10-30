@@ -121,6 +121,12 @@ class APNsService:
 		topic: str = None,
 		err_func: ErrFunc = None,
 	):
+		try:
+			loop = asyncio.get_event_loop()
+		except RuntimeError:
+			loop = asyncio.new_event_loop()
+			asyncio.set_event_loop(loop)
+
 		self.client = self._create_client(
 			creds=creds, application_id=application_id, topic=topic, err_func=err_func
 		)
