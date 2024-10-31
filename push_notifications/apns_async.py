@@ -142,7 +142,7 @@ class APNsService:
 
 	def send_bulk_messages(self, requests):
 		async def _send():
-			semaphore = asyncio.Semaphore(4)
+			semaphore = asyncio.Semaphore(5)
 			results: tuple[Any] = await asyncio.gather(*(self.send_message_async(request, semaphore) for request in requests))
 			return results
 
