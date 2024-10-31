@@ -5,6 +5,7 @@ from typing import Awaitable, Callable, Dict, Optional, Union, Tuple, Any
 
 from aioapns import APNs, ConnectionError, NotificationRequest
 from aioapns.common import NotificationResult
+from h2.exceptions import ProtocolError
 
 from . import models
 from .conf import get_manager
@@ -142,7 +143,7 @@ class APNsService:
 
 	def send_bulk_messages(self, requests):
 		async def _send():
-			semaphore = asyncio.Semaphore(5)
+			semaphore = asyncio.Semaphore(6)
 			results: tuple[Any] = await asyncio.gather(*(self.send_message_async(request, semaphore) for request in requests))
 			return results
 
@@ -154,7 +155,11 @@ class APNsService:
 
 	async def send_message_async(self, request, semaphore):
 		async with semaphore:
-			response = await self.client.send_notification(request)
+			try:
+				response = await self.client.send_notification(request)
+			except ProtocolError:
+				await asyncio.sleep(.1)
+				response = await self.client.send_notification(request)
 
 		return request.device_token, response,
 
