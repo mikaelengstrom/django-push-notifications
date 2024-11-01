@@ -257,7 +257,7 @@ def apns_send_message(
 		err_func=err_func,
 	)
 
-	return results[0]
+	return results
 
 
 def apns_send_bulk_message(
