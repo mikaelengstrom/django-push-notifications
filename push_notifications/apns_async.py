@@ -240,7 +240,7 @@ def apns_send_message(
 	:param application_id: The application_id to use
 	:param creds: The credentials to use
 	"""
-	apns_send_bulk_message(
+	results = apns_send_bulk_message(
 		registration_ids=[registration_id],
 		alert=alert,
 		application_id=application_id,
@@ -256,6 +256,8 @@ def apns_send_message(
 		collapse_id=collapse_id,
 		err_func=err_func,
 	)
+
+	return results[0]
 
 
 def apns_send_bulk_message(
