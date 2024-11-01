@@ -1,7 +1,8 @@
 import asyncio
 import time
+from asyncio import InvalidStateError
 from dataclasses import asdict, dataclass
-from typing import Awaitable, Callable, Dict, Optional, Union, Tuple, Any
+from typing import Awaitable, Callable, Dict, Optional, Union, Any
 
 from aioapns import APNs, ConnectionError, NotificationRequest
 from aioapns.common import NotificationResult
@@ -116,11 +117,11 @@ class APNsService:
 	__slots__ = ("client",)
 
 	def __init__(
-		self,
-		application_id: str = None,
-		creds: Credentials = None,
-		topic: str = None,
-		err_func: ErrFunc = None,
+			self,
+			application_id: str = None,
+			creds: Credentials = None,
+			topic: str = None,
+			err_func: ErrFunc = None,
 	):
 		try:
 			loop = asyncio.get_event_loop()
@@ -133,8 +134,8 @@ class APNsService:
 		)
 
 	def send_message(
-		self,
-		request: NotificationRequest,
+			self,
+			request: NotificationRequest,
 	):
 		loop = asyncio.get_event_loop()
 		routine = self.client.send_notification(request)
@@ -142,9 +143,17 @@ class APNsService:
 		return res
 
 	def send_bulk_messages(self, requests):
+		max_concurrency = 4
+		timeout_per_notification_in_seconds = 2
+
 		async def _send():
-			semaphore = asyncio.Semaphore(6)
-			results: tuple[Any] = await asyncio.gather(*(self.send_message_async(request, semaphore) for request in requests))
+			semaphore = asyncio.Semaphore(max_concurrency)
+			coroutines = [self.send_message_async(request, semaphore, timeout_per_notification_in_seconds) for request
+						  in requests]
+			results: tuple[Any] = []
+			for completed_coroutine in asyncio.as_completed(coroutines):
+				results.append(await completed_coroutine)
+
 			return results
 
 		try:
@@ -153,31 +162,41 @@ class APNsService:
 		except RuntimeError:
 			return asyncio.run(_send())
 
-	async def send_message_async(self, request, semaphore):
+	async def send_message_async(self, request, semaphore, timeout):
 		async with semaphore:
 			try:
-				response = await self.client.send_notification(request)
-			except ProtocolError:
-				await asyncio.sleep(.1)
-				response = await self.client.send_notification(request)
+				try:
+					response = await asyncio.wait_for(self.client.send_notification(request), timeout)
+				except (ProtocolError, InvalidStateError,):
+					await asyncio.sleep(.1)
+					response = await asyncio.wait_for(self.client.send_notification(request), timeout)
+			except asyncio.TimeoutError:
+				return request.device_token, NotificationResult(request.notification_id, status="TIMEOUT",
+																description="TimeoutError")
+			except (ProtocolError, InvalidStateError,):
+				return request.device_token, NotificationResult(request.notification_id, status="CONNECTION_OVERLOADED",
+																description="ConnectionOverloaded")
+			except:
+				return request.device_token, NotificationResult(request.notification_id, status="UNKNOWN",
+																description="UnknownError")
 
 		return request.device_token, response,
 
 	def _create_notification_request_from_args(
-		self,
-		registration_id: str,
-		alert: Union[str, Alert],
-		badge: int = None,
-		sound: str = None,
-		extra: dict = {},
-		expiration: int = None,
-		thread_id: str = None,
-		loc_key: str = None,
-		priority: int = None,
-		collapse_id: str = None,
-		aps_kwargs: dict = {},
-		message_kwargs: dict = {},
-		notification_request_kwargs: dict = {},
+			self,
+			registration_id: str,
+			alert: Union[str, Alert],
+			badge: int = None,
+			sound: str = None,
+			extra: dict = {},
+			expiration: int = None,
+			thread_id: str = None,
+			loc_key: str = None,
+			priority: int = None,
+			collapse_id: str = None,
+			aps_kwargs: dict = {},
+			message_kwargs: dict = {},
+			notification_request_kwargs: dict = {},
 	):
 		if alert is None:
 			alert = Alert(body="")
@@ -221,11 +240,11 @@ class APNsService:
 		return request
 
 	def _create_client(
-		self,
-		creds: Credentials = None,
-		application_id: str = None,
-		topic=None,
-		err_func: ErrFunc = None,
+			self,
+			creds: Credentials = None,
+			application_id: str = None,
+			topic=None,
+			err_func: ErrFunc = None,
 	) -> APNs:
 		use_sandbox = get_manager().get_apns_use_sandbox(application_id)
 		if topic is None:
@@ -264,20 +283,20 @@ class APNsService:
 
 
 def apns_send_message(
-	registration_id: str,
-	alert: Union[str, Alert],
-	application_id: str = None,
-	creds: Credentials = None,
-	topic: str = None,
-	badge: int = None,
-	sound: str = None,
-	extra: dict = {},
-	expiration: int = None,
-	thread_id: str = None,
-	loc_key: str = None,
-	priority: int = None,
-	collapse_id: str = None,
-	err_func: ErrFunc = None,
+		registration_id: str,
+		alert: Union[str, Alert],
+		application_id: str = None,
+		creds: Credentials = None,
+		topic: str = None,
+		badge: int = None,
+		sound: str = None,
+		extra: dict = {},
+		expiration: int = None,
+		thread_id: str = None,
+		loc_key: str = None,
+		priority: int = None,
+		collapse_id: str = None,
+		err_func: ErrFunc = None,
 ):
 	"""
 	Sends an APNS notification to a single registration_id.
@@ -324,20 +343,20 @@ def apns_send_message(
 
 
 def apns_send_bulk_message(
-	registration_ids: list[str],
-	alert: Union[str, Alert],
-	application_id: str = None,
-	creds: Credentials = None,
-	topic: str = None,
-	badge: int = None,
-	sound: str = None,
-	extra: dict = {},
-	expiration: int = None,
-	thread_id: str = None,
-	loc_key: str = None,
-	priority: int = None,
-	collapse_id: str = None,
-	err_func: ErrFunc = None,
+		registration_ids: list[str],
+		alert: Union[str, Alert],
+		application_id: str = None,
+		creds: Credentials = None,
+		topic: str = None,
+		badge: int = None,
+		sound: str = None,
+		extra: dict = {},
+		expiration: int = None,
+		thread_id: str = None,
+		loc_key: str = None,
+		priority: int = None,
+		collapse_id: str = None,
+		err_func: ErrFunc = None,
 ):
 	"""
 	Sends an APNS notification to one or more registration_ids.
@@ -387,4 +406,3 @@ def apns_send_bulk_message(
 		)
 
 	return results
-
