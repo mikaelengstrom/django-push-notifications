@@ -1,6 +1,5 @@
 import asyncio
 import time
-import uvloop
 
 from dataclasses import asdict, dataclass
 from typing import Awaitable, Callable, Dict, Optional, Union
@@ -257,7 +256,11 @@ def apns_send_message(
 		err_func=err_func,
 	)
 
-	return results
+	for result in results.values():
+		if result == "Success":
+			return {"results": [result]}
+		else:
+			return {"results": [{"error": result}]}
 
 
 def apns_send_bulk_message(
@@ -294,7 +297,6 @@ def apns_send_bulk_message(
 		results: Dict[str, str] = {}
 		inactive_tokens = []
 
-		uvloop.install()
 		responses = asyncio.run(_send_bulk_request(
 			registration_ids=registration_ids,
 			alert=alert,
