@@ -317,7 +317,8 @@ def apns_send_bulk_message(
 			results[registration_id] = (
 				"Success" if result.is_successful else result.description
 			)
-			if not result.is_successful and result.description in ["Unregistered", "BadDeviceToken", "DeviceTokenNotForTopic"]:
+			if not result.is_successful and result.description in ["Unregistered", "BadDeviceToken",
+																   "DeviceTokenNotForTopic"]:
 				inactive_tokens.append(registration_id)
 
 		if len(inactive_tokens) > 0:
@@ -370,8 +371,14 @@ async def _send_bulk_request(
 
 async def _send_request(apns, request):
 	try:
-		res = await apns.send_notification(request)
+		res = await asyncio.wait_for(apns.send_notification(request), timeout=1)
 		return request.device_token, res
+	except asyncio.TimeoutError:
+		return request.device_token, NotificationResult(
+			notification_id=request.notification_id,
+			status="failed",
+			description="TimeoutError"
+		)
 	except:
 		return request.device_token, NotificationResult(
 			notification_id=request.notification_id,
